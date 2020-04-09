@@ -1,0 +1,28 @@
+# RPRViewer
+
+Passive:
+* Receive stage
+
+Active:
+* Request stage
+
+# RPRViewer-plugin IPC architecture
+
+    #-------------------#
+    |       Plugin      |
+    +-------------------+
+    |   REQ   |   REP   |
+    '---+---------------'
+       |   ^     |   ^
+       |   |     |   |
+Notify |   |     |   | Control
+       |   |     |   |
+       |   |     |   |
+       v   |     v   |
+    .-------------------.
+    |       Viewer      |
+    +-------------------+
+    |   REP   |   REQ   |
+    #---+---------------#
+
+Each REQ-REP pair is effectively unidirectional connections with REP used as connection checker (if reply is received then connection is in a good shape)
