@@ -9,24 +9,62 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-class Plugin : public IPRPort::DataSource {
+class Plugin : public IPRPort::CommandListener {
 public:
     Plugin(DCC& dcc);
 
     void Update();
 
-    // IPRPort::Data source implementation
-    std::string GetEncodedStage() override;
+    // IPRPort::CommandListener implementation
+    std::string ProcessCommand(std::string const& command) override;
 
 private:
     void UpdateStage();
 
+    struct LayerNode;
+    void UpdatePrimitiveLayer(DCC::Change const& change, SdfPath const& layerPath);
+
+    void UpdateMeshLayer(LayerNode* node, SdfPath const& layerPath, Mesh const& mesh);
+    void UpdateMaterialLayer(LayerNode* node, SdfPath const& layerPath, Material const& material);
+
 private:
     DCC& m_dcc;
 
-    UsdStageRefPtr m_stage;
-
     std::unique_ptr<IPRPort> m_iprPort;
+
+private:
+    /// Enqueued IPR requests
+    bool m_fullStageResync = true;
+    std::set<std::string> m_requestedLayers;
+
+private:
+    const SdfFileFormatConstPtr kUsdcFileFormat;
+    const SdfPath kMaterialsScopePath;
+    const SdfPath kMeshesScopePath;
+
+    SdfPath GetMaterialPath(std::string const& id) const;
+    SdfPath GetMeshPath(std::string const& id) const;
+
+private:
+    struct LayerNode {
+        /// Time of the last edit, time is since epoch in microseconds
+        uint64_t timestamp;
+
+        /// UsdStage of the current layer
+        UsdStageRefPtr stage;
+
+        LayerNode* parent;
+        std::map<std::string, std::unique_ptr<LayerNode>> children;
+
+        void UpdateTimestamp();
+    };
+    std::unique_ptr<LayerNode> m_rootLayer;
+    LayerNode* m_materialsNode;
+    LayerNode* m_meshesNode;
+
+    std::unique_ptr<LayerNode> CreateLayerNode(LayerNode* parent = nullptr, bool intermediate = false);
+    LayerNode* FindLayer(std::string const& layerPath);
+    void SendLayer(std::string const& layerPath, LayerNode* layer);
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

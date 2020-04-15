@@ -2,6 +2,8 @@
 #include "iprPort.h"
 
 #include <pxr/base/vt/value.h>
+#include <pxr/base/tf/stringUtils.h>
+
 #include <pxr/usd/sdf/path.h>
 #include <pxr/usd/sdf/layer.h>
 #include <pxr/usd/sdf/fileFormat.h>
@@ -16,83 +18,271 @@ TF_DEFINE_PRIVATE_TOKENS(_tokens,
     (UsdPreviewSurface)
     (diffuseColor)
     (surface)
+    (getStage)
+    (getLayer)
+    (materials)
+    (meshes)
 );
 
 Plugin::Plugin(DCC& dcc)
-    : m_dcc(dcc)
+    : kUsdcFileFormat(SdfFileFormat::FindById(_tokens->usdc))
+    , kMaterialsScopePath("/materials")
+    , kMeshesScopePath("/meshes")
+    , m_dcc(dcc)
     , m_iprPort(new IPRPort(this)) {
-    auto usdcFileFormat = SdfFileFormat::FindById(_tokens->usdc);
-    auto layer = SdfLayer::CreateAnonymous("layer", usdcFileFormat);
-    m_stage = UsdStage::CreateInMemory("stage", layer);
-    if (!m_stage) {
-        throw std::runtime_error("Failed to create stage");
+
+}
+
+std::string Plugin::ProcessCommand(std::string const& command) {
+    if (_tokens->getStage == command) {
+        m_fullStageResync = true;
+    } else if (TfStringStartsWith(command, _tokens->getLayer)) {
+        auto tokens = TfStringTokenize(command);
+        if (tokens.size() != 2) {
+            return "invalid args";
+        }
+
+        if (!m_fullStageResync) {
+            m_requestedLayers.insert(tokens[1]);
+        }
+    } else {
+        return "unknown";
     }
+
+    return "ok";
 }
 
 void Plugin::Update() {
-    if (m_dcc.IsSceneChanged()) {
-        UpdateStage();
+    UpdateStage();
 
-        m_iprPort->StageChanged();
+    if (m_fullStageResync) {
+        std::function<void(LayerNode*, std::string const&, std::string const&)> traverseNode =
+            [&](LayerNode* node, std::string const& nodeId, std::string const& parentPath) {
+            auto nodePath = (parentPath + '/') + nodeId;
+            SendLayer(nodePath, node);
+
+            for (auto& c : node->children) {
+                traverseNode(c.second.get(), c.first, nodePath);
+            }
+        };
+        traverseNode(m_rootLayer.get(), "", "");
+        m_fullStageResync = false;
+    } else if (!m_requestedLayers.empty()) {
+        for (auto& layerPath : m_requestedLayers) {
+            if (auto layer = FindLayer(layerPath)) {
+                SendLayer(layerPath, layer);
+            }
+        }
     }
+    m_requestedLayers.clear();
 
     m_iprPort->Update();
 }
 
 void Plugin::UpdateStage() {
+    std::vector<DCC::Change> changes;
+    m_dcc.GetChanges(&changes);
 
-    std::map<std::string, UsdShadeMaterial> shadeMaterials;
+    if (!m_rootLayer) {
+        m_rootLayer = CreateLayerNode();
 
-    SdfPath materialsScopePath("/materials");
+        auto materialsNode = CreateLayerNode(m_rootLayer.get(), true);
+        m_materialsNode = materialsNode.get();
+        m_rootLayer->children["materials"] = std::move(materialsNode);
 
-    // Remove all previous materials
-    m_stage->RemovePrim(materialsScopePath);
-
-    UsdGeomScope::Define(m_stage, materialsScopePath);
-    for (auto& material : m_dcc.GetMaterials()) {
-        auto materialPath = materialsScopePath.AppendElementString(material.id);
-        auto shadeMaterial = UsdShadeMaterial::Define(m_stage, materialPath);
-
-        auto shaderPath = materialPath.AppendElementString("surface");
-        auto shader = UsdShadeShader::Define(m_stage, shaderPath);
-        shader.CreateIdAttr().Set(_tokens->UsdPreviewSurface);
-        shader.CreateInput(_tokens->diffuseColor, pxr::SdfValueTypeNames->Color3f).Set(material.color);
-
-        shadeMaterial.CreateSurfaceOutput().ConnectToSource(shader, _tokens->surface);
-
-        shadeMaterials[material.id] = shadeMaterial;
+        auto meshesNode = CreateLayerNode(m_rootLayer.get(), true);
+        m_meshesNode = meshesNode.get();
+        m_rootLayer->children["meshes"] = std::move(meshesNode);
     }
 
-    SdfPath meshesScopePath("/meshes");
+    bool updateRootLayer = false;
+    for (auto& change : changes) {
+        SdfPath layerPath;
+        if (change.primType == DCC::PrimitiveType::Mesh) {
+            layerPath = GetMeshPath(change.primId);
+        } else if (change.primType == DCC::PrimitiveType::Material) {
+            layerPath = GetMaterialPath(change.primId);
+        } else {
+            TF_CODING_ERROR("Unknown primitive type");
+            continue;
+        }
 
-    // Remove all previous meshes
-    m_stage->RemovePrim(meshesScopePath);
+        UpdatePrimitiveLayer(change, layerPath);
 
-    UsdGeomScope::Define(m_stage, meshesScopePath);
-    for (auto& mesh : m_dcc.GetMeshes()) {
-        auto meshPath = meshesScopePath.AppendElementString(mesh.id);
-        auto meshPrim = UsdGeomMesh::Define(m_stage, meshPath);
+        if (change.type == DCC::Change::Type::Add) {
+            auto overPrim = m_rootLayer->stage->OverridePrim(layerPath);
+            auto references = overPrim.GetReferences();
+            references.ClearReferences(); // unnecessary if DCC information is absolutely trusted
+            // XXX: currently do not work, we need custom custom ArResolver
+            // default ArResolver look up layers only located on the disk
+            references.AddReference(SdfReference(layerPath.GetString()));
+            updateRootLayer = true;
+        } else if (change.type == DCC::Change::Type::Remove) {
+            m_rootLayer->stage->RemovePrim(layerPath);
+            updateRootLayer = true;
+        }
+    }
 
-        meshPrim.CreateFaceVertexCountsAttr(VtValue(mesh.faceCounts));
-        meshPrim.CreateFaceVertexIndicesAttr(VtValue(mesh.faceIndices));
-        meshPrim.CreatePointsAttr(VtValue(mesh.points));
-
-        meshPrim.AddTransformOp().Set(mesh.transform);
-
-        auto materialBinding = UsdShadeMaterialBindingAPI::Apply(meshPrim.GetPrim());
-        materialBinding.Bind(shadeMaterials[mesh.materialId]);
+    if (updateRootLayer) {
+        m_rootLayer->UpdateTimestamp();
+        m_iprPort->NotifyLayerEdit("/", m_rootLayer->timestamp);
     }
 }
 
-std::string Plugin::GetEncodedStage() {
-    printf("Plugin: getting encoded stage\n");
-
-    std::string encodedStage;
-    if (!m_stage->ExportToString(&encodedStage)) {
-        TF_RUNTIME_ERROR("Failed to export stage to string");
-        return "";
+void Plugin::UpdatePrimitiveLayer(
+    DCC::Change const& change,
+    SdfPath const& layerPath) {
+    LayerNode* parentLayer;
+    if (change.primType == DCC::PrimitiveType::Mesh) {
+        parentLayer = m_meshesNode;
+    } else if (change.primType == DCC::PrimitiveType::Material) {
+        parentLayer = m_materialsNode;
+    } else {
+        TF_CODING_ERROR("Unknown primitive type");
+        return;
     }
-    return encodedStage;
+
+    if (change.type == DCC::Change::Type::Remove) {
+        auto it = parentLayer->children.find(change.primId);
+        if (it == parentLayer->children.end()) {
+            TF_RUNTIME_ERROR("Invalid info from DCC: \"%s\" does not exist", layerPath.GetText());
+            return;
+        }
+        parentLayer->children.erase(it);
+
+        m_iprPort->NotifyLayerRemove(layerPath.GetString());
+    } else {
+        LayerNode* layer;
+        if (change.type == DCC::Change::Type::Add) {
+            // Sanity check: if primitive already exists
+            auto it = parentLayer->children.find(change.primId);
+            if (it != parentLayer->children.end()) {
+                TF_RUNTIME_ERROR("Invalid info from DCC: \"%s\" already exists", layerPath.GetText());
+                parentLayer->children.erase(it);
+            }
+
+            auto status = parentLayer->children.emplace(change.primId, CreateLayerNode(parentLayer));
+            layer = status.first->second.get();
+        } else {
+            // Sanity check: if primitive does not exists
+            auto it = parentLayer->children.find(change.primId);
+            if (it == parentLayer->children.end()) {
+                TF_RUNTIME_ERROR("Invalid info from DCC: \"%s\" does not exist", layerPath.GetText());
+                auto status = parentLayer->children.emplace(change.primId, CreateLayerNode(parentLayer));
+                it = status.first;
+            }
+
+            layer = it->second.get();
+        }
+
+        // For now, create layer from scratch when edited due to no information about actual change in primitive
+        if (change.type == DCC::Change::Type::Edit) {
+            parentLayer->children[change.primId] = CreateLayerNode(parentLayer);
+            layer = parentLayer->children[change.primId].get();
+        }
+
+        if (change.primType == DCC::PrimitiveType::Mesh) {
+            UpdateMeshLayer(layer, layerPath, m_dcc.GetMesh(change.primId));
+        } else if (change.primType == DCC::PrimitiveType::Material) {
+            UpdateMaterialLayer(layer, layerPath, m_dcc.GetMaterial(change.primId));
+        }
+
+        layer->UpdateTimestamp();
+        m_iprPort->NotifyLayerEdit(layerPath.GetString(), layer->timestamp);
+    }
+}
+
+void Plugin::UpdateMeshLayer(LayerNode* node, SdfPath const& layerPath, Mesh const& meshData) {
+    auto mesh = UsdGeomMesh::Define(node->stage, layerPath);
+
+    mesh.CreateFaceVertexCountsAttr(VtValue(meshData.faceCounts));
+    mesh.CreateFaceVertexIndicesAttr(VtValue(meshData.faceIndices));
+    mesh.CreatePointsAttr(VtValue(meshData.points));
+    mesh.AddTransformOp().Set(meshData.transform);
+
+    auto meshPrim = mesh.GetPrim();
+    auto materialRel = meshPrim.CreateRelationship(UsdShadeTokens->materialBinding, false);
+    materialRel.SetTargets({GetMaterialPath(meshData.materialId)});
+
+    node->stage->SetDefaultPrim(meshPrim);
+}
+
+void Plugin::UpdateMaterialLayer(LayerNode* node, SdfPath const& layerPath, Material const& materialData) {
+    auto material = UsdShadeMaterial::Define(node->stage, layerPath);
+
+    auto shaderPath = layerPath.AppendElementString("surface");
+    auto shader = UsdShadeShader::Define(node->stage, shaderPath);
+    shader.CreateIdAttr().Set(_tokens->UsdPreviewSurface);
+    shader.CreateInput(_tokens->diffuseColor, pxr::SdfValueTypeNames->Color3f).Set(materialData.color);
+
+    material.CreateSurfaceOutput().ConnectToSource(shader, _tokens->surface);
+
+    node->stage->SetDefaultPrim(material.GetPrim());
+}
+
+void Plugin::LayerNode::UpdateTimestamp() {
+    timestamp = std::chrono::steady_clock::now().time_since_epoch().count() / 1000;
+}
+
+std::unique_ptr<Plugin::LayerNode> Plugin::CreateLayerNode(LayerNode* parent, bool intermediate) {
+    UsdStageRefPtr stage;
+    if (!intermediate) {
+        auto sdfLayer = SdfLayer::CreateAnonymous(std::string(), kUsdcFileFormat);
+        stage = UsdStage::CreateInMemory(std::string(), sdfLayer);
+        if (!stage) {
+            throw std::runtime_error("Failed to create UsdStage");
+        }
+    }
+
+    auto layerNode = std::make_unique<LayerNode>();
+    layerNode->parent = parent;
+    layerNode->timestamp = 0u;
+    layerNode->stage = stage;
+    return layerNode;
+}
+
+Plugin::LayerNode* Plugin::FindLayer(std::string const& layerPath) {
+    if (layerPath[0] != '/') {
+        return nullptr;
+    }
+
+    LayerNode* parentNode;
+
+    auto tokens = TfStringTokenize(layerPath, "/");
+    if (tokens.size() != 2) {
+        return nullptr;
+    }
+
+    if (tokens[0] == "meshes") {
+        parentNode = m_meshesNode;
+    } else if (tokens[0] == "materials") {
+        parentNode = m_materialsNode;
+    } else {
+        return nullptr;
+    }
+
+    auto layerIt = parentNode->children.find(tokens[1]);
+    if (layerIt == parentNode->children.end()) {
+        return nullptr;
+    }
+
+    return layerIt->second.get();
+}
+
+void Plugin::SendLayer(std::string const& layerPath, LayerNode* layer) {
+    std::string encodedLayer;
+    if (layer->stage &&
+        layer->stage->ExportToString(&encodedLayer)) {
+        m_iprPort->SendLayer(layerPath, layer->timestamp, std::move(encodedLayer));
+    }
+}
+
+SdfPath Plugin::GetMaterialPath(std::string const& id) const {
+    return kMaterialsScopePath.AppendElementString(id);
+}
+
+SdfPath Plugin::GetMeshPath(std::string const& id) const {
+    return kMeshesScopePath.AppendElementString(id);
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

@@ -6,6 +6,7 @@
 #include <pxr/base/vt/array.h>
 
 #include <vector>
+#include <map>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -14,16 +15,12 @@ struct Mesh {
     VtIntArray faceCounts;
     VtIntArray faceIndices;
 
-    std::string id;
-
     std::string materialId;
 
     GfMatrix4d transform;
 };
 
 struct Material {
-    std::string id;
-
     GfVec3f color;
 };
 
@@ -32,15 +29,36 @@ public:
     DCC();
 
     void Update();
-    bool IsSceneChanged();
 
-    std::vector<Mesh> const& GetMeshes() const { return m_meshes; }
-    std::vector<Material> const& GetMaterials() const { return m_materials; }
+    enum class PrimitiveType {
+        Mesh,
+        Material
+    };
+
+    struct Change {
+        enum class Type {
+            Add,
+            Remove,
+            Edit
+        };
+        Type type;
+
+        PrimitiveType primType;
+
+        std::string primId;
+    };
+    void GetChanges(std::vector<Change>* changes) {
+        std::swap(m_changes, *changes);
+    }
+
+    Mesh const& GetMesh(std::string const& id) { return m_meshes.at(id); }
+    Material const& GetMaterial(std::string const& id) { return m_materials.at(id); }
 
 private:
-    bool m_isChanged = true;
-    std::vector<Mesh> m_meshes;
-    std::vector<Material> m_materials;
+    std::map<std::string, Mesh> m_meshes;
+    std::map<std::string, Material> m_materials;
+
+    std::vector<Change> m_changes;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

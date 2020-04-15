@@ -1,28 +1,24 @@
 # RPRViewer
 
-Passive:
-* Receive stage
-
-Active:
-* Request stage
+* Receives layer updates - addition, removal, editing
+* Receives layers
+* Requests all layers or a particular one
 
 # RPRViewer-plugin IPC architecture
 
     #-------------------#
     |       Plugin      |
     +-------------------+
-    |   REQ   |   REP   |
+    |   PUSH  |   REP   |
     '---+---------------'
-       |   ^     |   ^
-       |   |     |   |
-Notify |   |     |   | Control
-       |   |     |   |
-       |   |     |   |
-       v   |     v   |
+         |       |   ^
+         |       |   |
+  Notify |       |   | Control
+         |       |   |
+         |       |   |
+         v       v   |
     .-------------------.
     |       Viewer      |
     +-------------------+
-    |   REP   |   REQ   |
+    |   PULL  |   REQ   |
     #---+---------------#
-
-Each REQ-REP pair is effectively unidirectional connections with REP used as connection checker (if reply is received then connection is in a good shape)

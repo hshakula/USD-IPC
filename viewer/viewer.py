@@ -3,23 +3,30 @@ import zmq
 import time
 import argparse
 
+class Layer:
+    def __init__(self, timestamp, data):
+        self.timestamp = timestamp
+        self.data = data
+
 class DataModel:
     def __init__(self):
-        self.stage = None
-        self.stage_timestamp = 0
+        self.layers = {}
 
 class NetworkController:
+    command_layer = 'layer'
+    command_layer_edit = 'layerEdit'
     command_get_stage = 'getStage'
 
     def __init__(self, parser_data, data_model):
         self.data_model = data_model
 
         self.zmqCtx = zmq.Context(1)
+        self.control_socket_add = parser_data.control
         self.control_socket = self.zmqCtx.socket(zmq.REQ)
-        self.control_socket.connect(parser_data.control)
+        self.control_socket.connect(self.control_socket_add)
         print('Viewer: control_socket connected')
 
-        self.notify_socket = self.zmqCtx.socket(zmq.REP)
+        self.notify_socket = self.zmqCtx.socket(zmq.PULL)
         self.notify_socket.bind('tcp://127.0.0.1:*')
 
         reply = self._try_request(self.compose_notify_socket_init_message)
@@ -41,7 +48,7 @@ class NetworkController:
     def update(self):
         # self._try_request(lambda socket: socket.send_string('ping'), 1, 100)
         while True:
-            timeout = 0 if self.data_model.stage else -1
+            timeout = 0 if self.data_model.layers else -1
             if self.notify_socket.poll(timeout) != zmq.POLLIN:
                 break
 
@@ -50,27 +57,42 @@ class NetworkController:
             command = messages[0].decode('utf-8')
             print('Viewer: received command - {}'.format(command))
 
-            if command == NetworkController.command_get_stage:
-                # Expected two more messages: timestamp and stage itself
+            if command == NetworkController.command_layer:
+                # Expected three more messages: layerPath, timestamp and layer itself
+                if len(messages) == 4:
+                    layerPath = messages[1].decode('utf-8')
+                    timestamp = int(messages[2])
+
+                    cachedLayer = self.data_model.layers.get(layerPath, None)
+                    if cachedLayer and cachedLayer.timestamp >= timestamp:
+                        print('Viewer: discard "{}" as outdated'.format(layerPath))
+                        continue
+
+                    self.data_model.layers[layerPath] = Layer(timestamp, messages[3])
+
+                    print('Viewer: new layer "{}" with timestamp {}'.format(layerPath, timestamp))
+                    print(messages[3])
+
+            elif command == NetworkController.command_layer_edit:
+                # Expected two more messages: layerPath and timestamp
                 if len(messages) == 3:
-                    timestamp = int(messages[1])
-                    if timestamp > self.data_model.stage_timestamp:
-                        self.data_model.stage_timestamp = timestamp
-                        self.data_model.stage = messages[2]
-                        print('Viewer: new stage with timestamp {}'.format(timestamp))
-                        print(self.data_model.stage)
-                    else:
-                        print('Viewer: discard stage as outdated')
+                    layerPath = messages[1].decode('utf-8')
+                    timestamp = int(messages[2])
 
-                    self.notify_socket.send_string('ok')
-                else:
-                    self.notify_socket.send_string('incorrect message structure')
-                continue
+                    cachedLayer = self.data_model.layers.get(layerPath, None)
+                    if cachedLayer and cachedLayer.timestamp >= timestamp:
+                        print('Viewer: discard "{}" as outdated'.format(layerPath))
+                        continue
 
-            self.notify_socket.send_string('fail')
+                    # Here we need to decide if we need this layer immediately
+                    # For example, user can disable part of scene,
+                    # so there is no reason to load disabled layer
+                    # We do not have such functionality yet, so make a request
+                    request_command = 'getLayer ' + layerPath
+                    self._try_request(lambda socket: socket.send_string(request_command))
 
     def request_stage(self):
-        self._try_request(lambda socket: socket.send_string(command_get_stage), 1, 0)
+        self._try_request(lambda socket: socket.send_string(NetworkController.command_get_stage))
 
     def _try_request(self, messageComposer, num_retries=3, request_timeout=2500):
         for i in range(num_retries):
@@ -86,20 +108,18 @@ class NetworkController:
 
                 if i + 1 != num_retries:
                     self.control_socket = self.zmqCtx.socket(zmq.REQ)
-                    self.control_socket.connect(parser_data.control)
+                    self.control_socket.connect(self.control_socket_add)
                 else:
-                    print('Viewer: plugin is offline');
+                    raise Exception('Viewer: plugin is offline')
 
-        return None
 
 def render(network_controller):
     while True:
         network_controller.update()
-        if network_controller.data_model.stage:
+        if network_controller.data_model.layers:
             # Actual render
             time.sleep(1)
-        else:
-            network_controller.request_stage()
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -109,4 +129,5 @@ if __name__ == '__main__':
     print('Viewer: control="{}"'.format(args.control))
 
     network_controller = NetworkController(args, DataModel())
+    network_controller.request_stage()
     render(network_controller)
