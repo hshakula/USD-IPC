@@ -3,6 +3,7 @@
 
 #include <pxr/base/vt/value.h>
 #include <pxr/base/tf/stringUtils.h>
+#include <pxr/base/arch/fileSystem.h>
 
 #include <pxr/usd/sdf/path.h>
 #include <pxr/usd/sdf/layer.h>
@@ -43,6 +44,7 @@ std::string Plugin::ProcessCommand(std::string const& command) {
         }
 
         if (!m_fullStageResync) {
+            printf("Plugin: new requested layer: \"%s\"\n", tokens[1].c_str());
             m_requestedLayers.insert(tokens[1]);
         }
     } else {
@@ -58,7 +60,9 @@ void Plugin::Update() {
     if (m_fullStageResync) {
         std::function<void(LayerNode*, std::string const&, std::string const&)> traverseNode =
             [&](LayerNode* node, std::string const& nodeId, std::string const& parentPath) {
-            auto nodePath = (parentPath + '/') + nodeId;
+            auto nodePath = parentPath + nodeId;
+            if (!node->children.empty()) nodePath += '/';
+
             SendLayer(nodePath, node);
 
             for (auto& c : node->children) {
@@ -84,16 +88,18 @@ void Plugin::UpdateStage() {
     m_dcc.GetChanges(&changes);
 
     if (!m_rootLayer) {
-        m_rootLayer = CreateLayerNode();
+        m_rootLayer = CreateLayerNode(nullptr, SdfPath("/root"));
 
-        auto materialsNode = CreateLayerNode(m_rootLayer.get(), true);
+        auto materialsNode = CreateLayerNode(m_rootLayer.get());
         m_materialsNode = materialsNode.get();
         m_rootLayer->children["materials"] = std::move(materialsNode);
 
-        auto meshesNode = CreateLayerNode(m_rootLayer.get(), true);
+        auto meshesNode = CreateLayerNode(m_rootLayer.get());
         m_meshesNode = meshesNode.get();
         m_rootLayer->children["meshes"] = std::move(meshesNode);
     }
+
+    auto sublayerPaths = m_rootLayer->stage->GetSessionLayer()->GetSubLayerPaths();
 
     bool updateRootLayer = false;
     for (auto& change : changes) {
@@ -110,16 +116,23 @@ void Plugin::UpdateStage() {
         UpdatePrimitiveLayer(change, layerPath);
 
         if (change.type == DCC::Change::Type::Add) {
-            auto overPrim = m_rootLayer->stage->OverridePrim(layerPath);
-            auto references = overPrim.GetReferences();
-            references.ClearReferences(); // unnecessary if DCC information is absolutely trusted
-            // XXX: currently do not work, we need custom custom ArResolver
-            // default ArResolver look up layers only located on the disk
-            references.AddReference(SdfReference(layerPath.GetString()));
-            updateRootLayer = true;
+            auto sublayerPath = GetLayerAssetPath(layerPath);
+            auto layerPathIdx = sublayerPaths.Find(sublayerPath);
+            if (layerPathIdx != size_t(-1)) {
+                TF_CODING_ERROR("Invalid info from DCC: \"%s\" already exists", layerPath.GetText());
+            } else {
+                sublayerPaths.insert(sublayerPaths.begin(), sublayerPath);
+                updateRootLayer = true;
+            }
         } else if (change.type == DCC::Change::Type::Remove) {
-            m_rootLayer->stage->RemovePrim(layerPath);
-            updateRootLayer = true;
+            auto sublayerPath = GetLayerAssetPath(layerPath);
+            auto layerPathIdx = sublayerPaths.Find(sublayerPath);
+            if (layerPathIdx == size_t(-1)) {
+                TF_CODING_ERROR("Invalid info from DCC: \"%s\" did not exist", layerPath.GetText());
+            } else {
+                sublayerPaths.Erase(layerPathIdx);
+                updateRootLayer = true;
+            }
         }
     }
 
@@ -161,24 +174,18 @@ void Plugin::UpdatePrimitiveLayer(
                 parentLayer->children.erase(it);
             }
 
-            auto status = parentLayer->children.emplace(change.primId, CreateLayerNode(parentLayer));
+            auto status = parentLayer->children.emplace(change.primId, CreateLayerNode(parentLayer, layerPath));
             layer = status.first->second.get();
         } else {
             // Sanity check: if primitive does not exists
             auto it = parentLayer->children.find(change.primId);
             if (it == parentLayer->children.end()) {
                 TF_RUNTIME_ERROR("Invalid info from DCC: \"%s\" does not exist", layerPath.GetText());
-                auto status = parentLayer->children.emplace(change.primId, CreateLayerNode(parentLayer));
+                auto status = parentLayer->children.emplace(change.primId, CreateLayerNode(parentLayer, layerPath));
                 it = status.first;
             }
 
             layer = it->second.get();
-        }
-
-        // For now, create layer from scratch when edited due to no information about actual change in primitive
-        if (change.type == DCC::Change::Type::Edit) {
-            parentLayer->children[change.primId] = CreateLayerNode(parentLayer);
-            layer = parentLayer->children[change.primId].get();
         }
 
         if (change.primType == DCC::PrimitiveType::Mesh) {
@@ -198,7 +205,7 @@ void Plugin::UpdateMeshLayer(LayerNode* node, SdfPath const& layerPath, Mesh con
     mesh.CreateFaceVertexCountsAttr(VtValue(meshData.faceCounts));
     mesh.CreateFaceVertexIndicesAttr(VtValue(meshData.faceIndices));
     mesh.CreatePointsAttr(VtValue(meshData.points));
-    mesh.AddTransformOp().Set(meshData.transform);
+    mesh.MakeMatrixXform().Set(meshData.transform);
 
     auto meshPrim = mesh.GetPrim();
     auto materialRel = meshPrim.CreateRelationship(UsdShadeTokens->materialBinding, false);
@@ -224,26 +231,32 @@ void Plugin::LayerNode::UpdateTimestamp() {
     timestamp = std::chrono::steady_clock::now().time_since_epoch().count() / 1000;
 }
 
-std::unique_ptr<Plugin::LayerNode> Plugin::CreateLayerNode(LayerNode* parent, bool intermediate) {
-    UsdStageRefPtr stage;
-    if (!intermediate) {
-        auto sdfLayer = SdfLayer::CreateAnonymous(std::string(), kUsdcFileFormat);
-        stage = UsdStage::CreateInMemory(std::string(), sdfLayer);
-        if (!stage) {
-            throw std::runtime_error("Failed to create UsdStage");
-        }
-    }
-
+std::unique_ptr<Plugin::LayerNode> Plugin::CreateLayerNode(LayerNode* parent, SdfPath const& layerPath) {
     auto layerNode = std::make_unique<LayerNode>();
     layerNode->parent = parent;
     layerNode->timestamp = 0u;
-    layerNode->stage = stage;
+    if (!layerPath.IsEmpty()) {
+        // Ideally, we would like to avoid any interaction with the disk.
+        // Semantically the best fit for this purpose would be UsdStage::CreateInMemory.
+        // But we cannot use it because whenever we will try to reference or sublayer this
+        // stage from the root stage or any other stage it will trigger errors (e.g. "could
+        // not find such layer"). Referencing in such a case would not work at all,
+        // sublayering will take effect but with errors in the console.
+        //
+        // UsdStage::CreateNew costs us a file creation with "#usda 1.0" as its contents.
+        // Until we call UsdStage::Save, which we never do, nothing more is written to the disk.
+        layerNode->stage = UsdStage::CreateNew(GetLayerAssetPath(layerPath, ArchGetTmpDir()));
+    }
     return layerNode;
 }
 
 Plugin::LayerNode* Plugin::FindLayer(std::string const& layerPath) {
     if (layerPath[0] != '/') {
         return nullptr;
+    }
+
+    if (layerPath == "/") {
+        return m_rootLayer.get();
     }
 
     LayerNode* parentNode;
@@ -270,11 +283,29 @@ Plugin::LayerNode* Plugin::FindLayer(std::string const& layerPath) {
 }
 
 void Plugin::SendLayer(std::string const& layerPath, LayerNode* layer) {
-    std::string encodedLayer;
-    if (layer->stage &&
-        layer->stage->ExportToString(&encodedLayer)) {
-        m_iprPort->SendLayer(layerPath, layer->timestamp, std::move(encodedLayer));
+    if (!layer->stage) {
+        return;
     }
+
+    std::string encodedLayer;
+    if (layerPath == "/") {
+        if (!layer->stage->GetSessionLayer()->ExportToString(&encodedLayer)) {
+            printf("Plugin: failed to export root layer to string\n");
+            return;
+        }
+        printf("Root layer:\n%s\n", encodedLayer.c_str());
+    } else {
+        if (!layer->stage->ExportToString(&encodedLayer)) {
+            printf("Plugin: failed to export \"%s\" layer to string\n", layerPath.c_str());
+            return;
+        }
+    }
+
+    m_iprPort->SendLayer(layerPath, layer->timestamp, std::move(encodedLayer));
+}
+
+std::string Plugin::GetLayerAssetPath(SdfPath const& layerPath, const char* prefix) {
+    return ArchNormPath(TfStringPrintf("%s%s.usda", prefix, layerPath.GetText()));
 }
 
 SdfPath Plugin::GetMaterialPath(std::string const& id) const {

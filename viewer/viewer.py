@@ -1,7 +1,20 @@
+import os
 import sys
 import zmq
 import time
 import argparse
+
+def get_layer_save_path(layer_path):
+    if layer_path == '/':
+        layer_path = '/root'
+    return '.{}.usda'.format(layer_path)
+
+def save_layer(layer_path, layer):
+    save_path = get_layer_save_path(layer_path)
+    save_dir = os.path.dirname(save_path)
+    os.makedirs(save_dir, exist_ok=True)
+    with open(save_path, 'wb') as file:
+        file.write(layer)
 
 class Layer:
     def __init__(self, timestamp, data):
@@ -58,38 +71,46 @@ class NetworkController:
             print('Viewer: received command - {}'.format(command))
 
             if command == NetworkController.command_layer:
-                # Expected three more messages: layerPath, timestamp and layer itself
+                # Expected three more messages: layer_path, timestamp and layer itself
                 if len(messages) == 4:
-                    layerPath = messages[1].decode('utf-8')
+                    layer_path = messages[1].decode('utf-8')
                     timestamp = int(messages[2])
 
-                    cachedLayer = self.data_model.layers.get(layerPath, None)
+                    cachedLayer = self.data_model.layers.get(layer_path, None)
                     if cachedLayer and cachedLayer.timestamp >= timestamp:
-                        print('Viewer: discard "{}" as outdated'.format(layerPath))
+                        print('Viewer: discard "{}" as outdated'.format(layer_path))
                         continue
 
-                    self.data_model.layers[layerPath] = Layer(timestamp, messages[3])
+                    self.data_model.layers[layer_path] = Layer(timestamp, messages[3])
 
-                    print('Viewer: new layer "{}" with timestamp {}'.format(layerPath, timestamp))
-                    print(messages[3])
+                    print('Viewer: new layer "{}" with timestamp {}'.format(layer_path, timestamp))
+                    save_layer(layer_path, messages[3])
 
             elif command == NetworkController.command_layer_edit:
-                # Expected two more messages: layerPath and timestamp
+                # Expected two more messages: layer_path and timestamp
                 if len(messages) == 3:
-                    layerPath = messages[1].decode('utf-8')
+                    layer_path = messages[1].decode('utf-8')
                     timestamp = int(messages[2])
 
-                    cachedLayer = self.data_model.layers.get(layerPath, None)
-                    if cachedLayer and cachedLayer.timestamp >= timestamp:
-                        print('Viewer: discard "{}" as outdated'.format(layerPath))
-                        continue
+                    if timestamp == 0: # layer has been removed
+                        try:
+                            os.remove(get_layer_save_path(layer_path))
+                            print('Viewer: removed "{}" layer'.format(layer_path))
+                        except:
+                            print('Viewer: failed to remove "{}" layer'.format(layer_path))
+                    else:
+                        cachedLayer = self.data_model.layers.get(layer_path, None)
+                        if cachedLayer and cachedLayer.timestamp >= timestamp:
+                            print('Viewer: discard "{}" as outdated'.format(layer_path))
+                            continue
 
-                    # Here we need to decide if we need this layer immediately
-                    # For example, user can disable part of scene,
-                    # so there is no reason to load disabled layer
-                    # We do not have such functionality yet, so make a request
-                    request_command = 'getLayer ' + layerPath
-                    self._try_request(lambda socket: socket.send_string(request_command))
+                        print('Viewer: edited layer: "{}"'.format(layer_path))
+                        # Here we need to decide if we need this layer immediately
+                        # For example, user can disable part of scene,
+                        # so there is no reason to load disabled layer
+                        # We do not have such functionality yet, so make a request
+                        request_command = 'getLayer ' + layer_path
+                        self._try_request(lambda socket: socket.send_string(request_command))
 
     def request_stage(self):
         self._try_request(lambda socket: socket.send_string(NetworkController.command_get_stage))
@@ -126,6 +147,7 @@ if __name__ == '__main__':
     parser.add_argument('--control', type=str, required=True)
     args = parser.parse_args()
 
+    print('Viewer: pwd="{}"'.format(os.getcwd()))
     print('Viewer: control="{}"'.format(args.control))
 
     network_controller = NetworkController(args, DataModel())

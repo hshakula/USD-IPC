@@ -62,9 +62,10 @@ private:
     LayerNode* m_materialsNode;
     LayerNode* m_meshesNode;
 
-    std::unique_ptr<LayerNode> CreateLayerNode(LayerNode* parent = nullptr, bool intermediate = false);
+    std::unique_ptr<LayerNode> CreateLayerNode(LayerNode* parent = nullptr, SdfPath const& layerPath = SdfPath());
     LayerNode* FindLayer(std::string const& layerPath);
     void SendLayer(std::string const& layerPath, LayerNode* layer);
+    std::string GetLayerAssetPath(SdfPath const& layerPath, const char* prefix = ".");
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE
