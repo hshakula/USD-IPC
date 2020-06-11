@@ -3,6 +3,7 @@
 #include <pxr/base/tf/stringUtils.h>
 #include <pxr/base/tf/staticTokens.h>
 #include <pxr/base/tf/instantiateSingleton.h>
+#include <pxr/base/arch/systemInfo.h>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -80,9 +81,12 @@ IPRPort::IPRPort(CommandListener* commandListener)
         throw std::runtime_error(TfStringPrintf("Failed to setup IPRPort control sockets: %d", e.num()));
     }
 
+    auto executableDir = TfGetPathName(ArchGetExecutablePath());
+    auto viewerScriptPath = executableDir + "viewer.py";
+
     // run viewer process
     m_viewerProcess = bp::child(
-        bp::search_path("python"), "D:\\dev\\usd-ipc\\viewer\\viewer.py",
+        bp::search_path("python"), viewerScriptPath,
         "--control", GetSocketAddress(m_controlSocket));
     if (!m_viewerProcess.running()) {
         throw std::runtime_error("Failed to run viewer process");
@@ -117,7 +121,7 @@ IPRPort::~IPRPort() {
     }
 }
 
-void IPRPort::SendLayer(std::string const& layerPath, uint64_t timestamp, std::string layer) {
+void IPRPort::SendLayer(SdfPath const& layerPath, uint64_t timestamp, std::string layer) {
     auto it = m_enqueuedLayers.find(layerPath);
     if (it != m_enqueuedLayers.end()) {
         if (it->second.timestamp < timestamp) {
@@ -143,7 +147,7 @@ void IPRPort::SendLayer(std::string const& layerPath, uint64_t timestamp, std::s
     }
 }
 
-void IPRPort::NotifyLayerEdit(std::string const& layerPath, uint64_t timestamp) {
+void IPRPort::NotifyLayerEdit(SdfPath const& layerPath, uint64_t timestamp) {
     auto it = m_enqueuedLayerEdits.find(layerPath);
     if (it != m_enqueuedLayerEdits.end()) {
         if (it->second < timestamp) {
@@ -161,7 +165,7 @@ void IPRPort::NotifyLayerEdit(std::string const& layerPath, uint64_t timestamp) 
     }
 }
 
-void IPRPort::NotifyLayerRemove(std::string const& layerPath) {
+void IPRPort::NotifyLayerRemove(SdfPath const& layerPath) {
     m_enqueuedLayerEdits.erase(layerPath);
     m_enqueuedLayers.erase(layerPath);
     NotifyLayerEdit(layerPath, 0);
@@ -261,10 +265,10 @@ void IPRPort::SendEnqueuedLayer() {
     }
 }
 
-bool IPRPort::SendLayerEditImpl(std::string const& layerPath, uint64_t timestamp) {
+bool IPRPort::SendLayerEditImpl(SdfPath const& layerPath, uint64_t timestamp) {
     try {
         m_notifySocket.send(GetZmqMessage(_tokens->layerEdit), zmq::send_flags::sndmore);
-        m_notifySocket.send(GetZmqMessage(layerPath), zmq::send_flags::sndmore);
+        m_notifySocket.send(GetZmqMessage(layerPath.GetString()), zmq::send_flags::sndmore);
         m_notifySocket.send(GetZmqMessage(timestamp));
         return true;
     } catch (zmq::error_t& e) {
@@ -273,10 +277,10 @@ bool IPRPort::SendLayerEditImpl(std::string const& layerPath, uint64_t timestamp
     }
 }
 
-bool IPRPort::SendLayerImpl(std::string const& layerPath, uint64_t timestamp, std::string const& layer) {
+bool IPRPort::SendLayerImpl(SdfPath const& layerPath, uint64_t timestamp, std::string const& layer) {
     try {
         m_notifySocket.send(GetZmqMessage(_tokens->layer), zmq::send_flags::sndmore);
-        m_notifySocket.send(GetZmqMessage(layerPath), zmq::send_flags::sndmore);
+        m_notifySocket.send(GetZmqMessage(layerPath.GetString()), zmq::send_flags::sndmore);
         m_notifySocket.send(GetZmqMessage(timestamp), zmq::send_flags::sndmore);
         m_notifySocket.send(zmq::message_t(layer.c_str(), layer.size()));
         return true;

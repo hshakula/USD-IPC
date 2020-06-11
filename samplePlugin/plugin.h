@@ -21,11 +21,9 @@ public:
 private:
     void UpdateStage();
 
-    struct LayerNode;
-    void UpdatePrimitiveLayer(DCC::Change const& change, SdfPath const& layerPath);
-
-    void UpdateMeshLayer(LayerNode* node, SdfPath const& layerPath, Mesh const& mesh);
-    void UpdateMaterialLayer(LayerNode* node, SdfPath const& layerPath, Material const& material);
+    struct Layer;
+    void UpdateMeshLayer(Layer* node, SdfPath const& layerPath, Mesh const& mesh);
+    void UpdateMaterialLayer(Layer* node, SdfPath const& layerPath, Material const& material);
 
 private:
     DCC& m_dcc;
@@ -35,37 +33,39 @@ private:
 private:
     /// Enqueued IPR requests
     bool m_fullStageResync = true;
-    std::set<std::string> m_requestedLayers;
+    std::set<SdfPath> m_requestedLayers;
 
 private:
     const SdfFileFormatConstPtr kUsdcFileFormat;
-    const SdfPath kMaterialsScopePath;
-    const SdfPath kMeshesScopePath;
-
-    SdfPath GetMaterialPath(std::string const& id) const;
-    SdfPath GetMeshPath(std::string const& id) const;
 
 private:
-    struct LayerNode {
+    struct Layer {
         /// Time of the last edit, time is since epoch in microseconds
         uint64_t timestamp;
 
         /// UsdStage of the current layer
         UsdStageRefPtr stage;
 
-        LayerNode* parent;
-        std::map<std::string, std::unique_ptr<LayerNode>> children;
-
-        void UpdateTimestamp();
+        Layer(SdfPath const& layerPath);
     };
-    std::unique_ptr<LayerNode> m_rootLayer;
-    LayerNode* m_materialsNode;
-    LayerNode* m_meshesNode;
 
-    std::unique_ptr<LayerNode> CreateLayerNode(LayerNode* parent = nullptr, SdfPath const& layerPath = SdfPath());
-    LayerNode* FindLayer(std::string const& layerPath);
-    void SendLayer(std::string const& layerPath, LayerNode* layer);
-    std::string GetLayerAssetPath(SdfPath const& layerPath, const char* prefix = ".");
+    struct Scope {
+        SdfPath path;
+        std::map<SdfPath, Layer> layers;
+
+        SdfPath GetLayerPath(SdfPath const& relativeLayerPath);
+        SdfPath GetLayerPath(std::string primId);
+    };
+
+    enum ScopeType {
+        kMaterialScope = 0,
+        kGeometryScope,
+        kScopeCount
+    };
+    Scope m_scopes[kScopeCount];
+
+    Layer* FindLayer(SdfPath const& layerPath);
+    void SendLayer(SdfPath const& layerPath, Layer const& layer);
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

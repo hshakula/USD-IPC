@@ -23,9 +23,9 @@ public:
     IPRPort(CommandListener* commandListener);
     ~IPRPort();
 
-    void NotifyLayerRemove(std::string const& layerPath);
-    void NotifyLayerEdit(std::string const& layerPath, uint64_t timestamp);
-    void SendLayer(std::string const& layerPath, uint64_t timestamp, std::string layer);
+    void NotifyLayerRemove(SdfPath const& layerPath);
+    void NotifyLayerEdit(SdfPath const& layerPath, uint64_t timestamp);
+    void SendLayer(SdfPath const& layerPath, uint64_t timestamp, std::string layer);
 
     void Update();
 
@@ -35,8 +35,8 @@ private:
     void SendEnqueuedLayerEdit();
     void SendEnqueuedLayer();
 
-    bool SendLayerEditImpl(std::string const& layerPath, uint64_t timestamp);
-    bool SendLayerImpl(std::string const& layerPath, uint64_t timestamp, std::string const& layer);
+    bool SendLayerEditImpl(SdfPath const& layerPath, uint64_t timestamp);
+    bool SendLayerImpl(SdfPath const& layerPath, uint64_t timestamp, std::string const& layer);
 
     bool ConnectionIsOk();
 
@@ -55,8 +55,8 @@ private:
         LayerDesc(uint64_t timestamp, std::string encodedString)
             : timestamp(timestamp), encodedString(std::move(encodedString)) {}
     };
-    std::map<std::string, LayerDesc> m_enqueuedLayers;
-    std::map<std::string, uint64_t> m_enqueuedLayerEdits;
+    std::map<SdfPath, LayerDesc> m_enqueuedLayers;
+    std::map<SdfPath, uint64_t> m_enqueuedLayerEdits;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE
