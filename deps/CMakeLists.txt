@@ -1,0 +1,5 @@
+set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+set(BUILD_TESTS OFF)
+set(WITH_PERF_TOOL OFF)
+add_subdirectory(libzmq)
+add_subdirectory(cppzmq)

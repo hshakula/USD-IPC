@@ -1,0 +1,8 @@
+[submodule "deps/cppzmq"]
+	path = deps/cppzmq
+	url = https://github.com/zeromq/cppzmq
+	branch = v4.6.0
+[submodule "deps/libzmq"]
+	path = deps/libzmq
+	url = https://github.com/zeromq/libzmq
+	branch = v4.3.2
