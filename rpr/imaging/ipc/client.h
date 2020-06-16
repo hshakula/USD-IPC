@@ -10,6 +10,7 @@
 #include <thread>
 #include <memory>
 #include <string>
+#include <map>
 #include <set>
 
 PXR_NAMESPACE_OPEN_SCOPE
@@ -106,15 +107,12 @@ private:
         UsdStageRefPtr m_rootStage;
         std::set<std::string> m_layers;
 
-        struct LayerUpdate {
-            std::string layerPath;
-            enum class Type {
-                Added,
-                Removed,
-                Edited
-            } type;
+        enum class LayerUpdateType {
+            Added,
+            Removed,
+            Edited
         };
-        std::vector<LayerUpdate> m_updates;
+        std::map<std::string, LayerUpdateType> m_updates;
     };
 };
 

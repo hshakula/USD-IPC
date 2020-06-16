@@ -234,11 +234,11 @@ void RprIpcClient::LayerController::AddLayer(
     size_t encodedLayerSize) {
     auto it = m_layers.find(layerPath);
     if (it == m_layers.end()) {
-        m_updates.push_back({layerPath, LayerUpdate::Type::Added});
+        m_updates[layerPath] = LayerUpdateType::Added;
         m_layers.insert(layerPath);
         TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcClient: new layer: %s\n", layerPath.c_str());
     } else {
-        m_updates.push_back({layerPath, LayerUpdate::Type::Edited});
+        m_updates[layerPath] = LayerUpdateType::Edited;
         TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcClient: layer edited: %s\n", layerPath.c_str());
     }
 
@@ -268,7 +268,7 @@ void RprIpcClient::LayerController::RemoveLayer(
         TF_RUNTIME_ERROR("Failed to remove \"%s\" layer: does not exist", layerPath.c_str());
     } else {
         TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcClient: removing layer: %s\n", layerPath.c_str());
-        m_updates.push_back({layerPath, LayerUpdate::Type::Removed});
+        m_updates[layerPath] = LayerUpdateType::Removed;
 
         auto layerSavePath = GetLayerSavePath(layerPath.c_str());
         ArchUnlinkFile(layerSavePath.c_str());
@@ -281,21 +281,22 @@ bool RprIpcClient::LayerController::Update() {
     SdfChangeBlock changeBlock;
     auto sublayerPaths = m_rootStage->GetRootLayer()->GetSubLayerPaths();
 
-    for (auto const& update : m_updates) {
-        auto layerFilePath = GetLayerFilePath(update.layerPath.c_str());
+    for (auto const& entry : m_updates) {
+        auto& layerPath = entry.first;
+        auto layerFilePath = GetLayerFilePath(layerPath.c_str());
 
         size_t layerIdx = sublayerPaths.Find(layerFilePath);
 
-        if (update.type == LayerUpdate::Type::Added) {
+        if (entry.second == LayerUpdateType::Added) {
             if (layerIdx != size_t(-1)) {
-                TF_CODING_ERROR("Invalid data from the server: \"%s\" already exists", update.layerPath.c_str());
+                TF_CODING_ERROR("Invalid data from the server: \"%s\" already exists", layerPath.c_str());
             } else {
                 TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcClient: adding layer: %s\n", layerPath.c_str());
                 sublayerPaths.insert(sublayerPaths.begin(), layerFilePath);
             }
-        } else if (update.type == LayerUpdate::Type::Removed) {
+        } else if (entry.second == LayerUpdateType::Removed) {
             if (layerIdx == size_t(-1)) {
-                TF_CODING_ERROR("Invalid data from the server: \"%s\" does not exist", update.layerPath.c_str());
+                TF_CODING_ERROR("Invalid data from the server: \"%s\" does not exist", layerPath.c_str());
             } else {
                 TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcClient: removing layer: %s\n", layerPath.c_str());
                 sublayerPaths.Erase(layerIdx);
