@@ -244,7 +244,7 @@ void RprIpcServer::ProcessControlSocket() {
     m_controlSocket.recv(msg);
 
     auto command = std::to_string(msg);
-    TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcServer: received \"%s\" command", command.c_str());
+    TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcServer: received \"%s\" command\n", command.c_str());
 
     // Process any RprIpcServer specific commands first
     if (RprIpcTokens->connect == command) {
@@ -258,7 +258,7 @@ void RprIpcServer::ProcessControlSocket() {
                 m_dataSocket.connect(dataSocketAddr);
 
                 m_controlSocket.send(GetZmqMessage(RprIpcTokens->ok));
-                TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcServer: connected dataSocket to %s", dataSocketAddr.c_str());
+                TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcServer: connected dataSocket to %s\n", dataSocketAddr.c_str());
 
                 SendAllLayers();
                 return;
@@ -288,7 +288,7 @@ void RprIpcServer::ProcessControlSocket() {
         }
 
         auto response = m_listener->ProcessCommand(command, payload, payloadSize);
-        TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcServer: response for \"%s\" command: %d", command.c_str(), response);
+        TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcServer: response for \"%s\" command: %d\n", command.c_str(), response);
         m_controlSocket.send(GetZmqMessage(response ? RprIpcTokens->ok : RprIpcTokens->fail));
     }
 }
@@ -314,7 +314,7 @@ void RprIpcServer::ProcessAppSocket() {
 void RprIpcServer::SendAllLayers() {
     std::lock_guard<std::mutex> lock(m_layersMutex);
     if (!m_layers.empty()) {
-        TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcServer: sending %zu layers", m_layers.size());
+        TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcServer: sending %zu layers\n", m_layers.size());
 
         std::shared_ptr<Sender> sender;
         GetSender(&sender);

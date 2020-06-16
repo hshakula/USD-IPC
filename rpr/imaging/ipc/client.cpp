@@ -45,7 +45,7 @@ RprIpcClient::RprIpcClient(
         socket.send(GetZmqMessage(RprIpcTokens->connect), zmq::send_flags::sndmore);
         socket.send(GetZmqMessage(dataSocketPort));
 
-        TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcClient: sending connect command: port=%s", dataSocketPort.c_str());
+        TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcClient: sending connect command: port=%s\n", dataSocketPort.c_str());
     }, 1000);
 
     if (connectReply != "ok") {
@@ -130,7 +130,7 @@ void RprIpcClient::RunNetworkWorker() {
                     m_controlSocket.recv(msg);
                     auto response = std::to_string(msg);
 
-                    TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcClient: server responded on the \"%s\" command: %s", command.c_str(), response.c_str());
+                    TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcClient: server responded on the \"%s\" command: %s\n", command.c_str(), response.c_str());
                 }
             }
         } catch (zmq::error_t& e) {
@@ -186,7 +186,7 @@ void RprIpcClient::ProcessDataSocket() {
                 RecvMore(m_dataSocket, msg);
                 auto layerPath = std::to_string(msg);
 
-                TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcClient: received \"%s\" command: %s", command.c_str(), layerPath.c_str());
+                TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcClient: received \"%s\" command: %s\n", command.c_str(), layerPath.c_str());
 
                 if (command.size() == RprIpcTokens->layer.size()) {
                     RecvMore(m_dataSocket, msg);
@@ -232,12 +232,12 @@ void RprIpcClient::LayerController::AddLayer(
     size_t encodedLayerSize) {
     auto it = m_layers.find(layerPath);
     if (it == m_layers.end()) {
-        TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcClient: new layer: %s", layerPath.c_str());
         m_updates.push_back({layerPath, LayerUpdate::Type::Added});
         m_layers.insert(layerPath);
+        TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcClient: new layer: %s\n", layerPath.c_str());
     } else {
-        TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcClient: layer edited: %s", layerPath.c_str());
         m_updates.push_back({layerPath, LayerUpdate::Type::Edited});
+        TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcClient: layer edited: %s\n", layerPath.c_str());
     }
 
     auto layerSavePath = GetLayerSavePath(layerPath.c_str());
@@ -290,7 +290,7 @@ void RprIpcClient::LayerController::RemoveLayer(
     if (it == m_layers.end()) {
         TF_RUNTIME_ERROR("Failed to remove \"%s\" layer: does not exist", layerPath.c_str());
     } else {
-        TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcClient: removing layer: %s", layerPath.c_str());
+        TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcClient: removing layer: %s\n", layerPath.c_str());
         m_updates.push_back({layerPath, LayerUpdate::Type::Removed});
 
         auto layerSavePath = GetLayerSavePath(layerPath.c_str());
@@ -313,14 +313,14 @@ bool RprIpcClient::LayerController::Update() {
             if (layerIdx != size_t(-1)) {
                 TF_CODING_ERROR("Invalid data from the server: \"%s\" already exists", update.layerPath.c_str());
             } else {
-                TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcClient: adding layer: %s", update.layerPath.c_str());
+                TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcClient: adding layer: %s\n", layerPath.c_str());
                 sublayerPaths.insert(sublayerPaths.begin(), layerFilePath);
             }
         } else if (update.type == LayerUpdate::Type::Removed) {
             if (layerIdx == size_t(-1)) {
                 TF_CODING_ERROR("Invalid data from the server: \"%s\" does not exist", update.layerPath.c_str());
             } else {
-                TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcClient: removing layer: %s", update.layerPath.c_str());
+                TF_DEBUG(RPR_IPC_DEBUG_MESSAGES).Msg("RprIpcClient: removing layer: %s\n", layerPath.c_str());
                 sublayerPaths.Erase(layerIdx);
             }
         }
