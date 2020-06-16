@@ -8,6 +8,8 @@
 #include <pxr/base/arch/fileSystem.h>
 #include <pxr/base/tf/diagnostic.h>
 #include <pxr/base/tf/stringUtils.h>
+#include <pxr/base/tf/pathUtils.h>
+#include <pxr/base/tf/fileUtils.h>
 
 #ifdef WIN32
 #include <Windows.h>
@@ -241,32 +243,7 @@ void RprIpcClient::LayerController::AddLayer(
     }
 
     auto layerSavePath = GetLayerSavePath(layerPath.c_str());
-
-    std::function<bool(std::string)> createDirectory = [&](std::string dir) {
-        struct stat info;
-        if (stat(dir.c_str(), &info) == 0 &&
-            info.st_mode == S_IFDIR) {
-            return true;
-        }
-
-        auto parentDir = TfGetBaseName(dir);
-        if (parentDir == dir) {
-            return true;
-        }
-
-        bool createdParentDir = createDirectory(parentDir);
-        if (!createdParentDir) {
-            return false;
-        }
-
-#if WIN32
-        bool created = CreateDirectory(dir.c_str(), nullptr) != FALSE;
-#else
-        static_assert(0, "implement me");
-#endif
-        return created;
-    };
-    if (!createDirectory(TfGetBaseName(layerSavePath))) {
+    if (!TfMakeDirs(TfGetPathName(layerSavePath), -1, true)) {
         TF_RUNTIME_ERROR("Cannot create directory for \"%s\" layer", layerSavePath.c_str());
         return;
     }
@@ -333,7 +310,7 @@ bool RprIpcClient::LayerController::Update() {
 }
 
 std::string RprIpcClient::LayerController::GetLayerSavePath(const char* layerPath) {
-    return TfStringPrintf("%s%s.usda", ArchGetTmpDir(), layerPath);
+    return TfNormPath(TfStringPrintf("%s%s.usda", ArchGetTmpDir(), layerPath));
 }
 
 std::string RprIpcClient::LayerController::GetLayerFilePath(const char* layerPath) {
