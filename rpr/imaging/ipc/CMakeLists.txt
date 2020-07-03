@@ -1,45 +1,24 @@
-set(PXR_PREFIX rpr/imaging)
-set(PXR_PACKAGE ipc)
+set(IPCSERVER_SRC_DIR ${RPR_VIEWER_LOCATION}/RPRViewer/src/ipc)
 
-set(USD_LIBRARIES
+add_library(ipc SHARED
+    ${IPCSERVER_SRC_DIR}/server.h
+    ${IPCSERVER_SRC_DIR}/server.cpp
+    ${IPCSERVER_SRC_DIR}/tokens.h
+    ${IPCSERVER_SRC_DIR}/tokens.cpp
+    ${IPCSERVER_SRC_DIR}/common.h
+    ${IPCSERVER_SRC_DIR}/debugCodes.h
+    ${IPCSERVER_SRC_DIR}/debugCodes.cpp
+    ${IPCSERVER_SRC_DIR}/zmqContext.h
+    ${IPCSERVER_SRC_DIR}/zmqContext.cpp)
+
+target_link_libraries(ipc PUBLIC
     arch
     tf
     sdf
-    usd)
+    usd
+    cppzmq)
 
-pxr_library(ipc
-    DISABLE_PRECOMPILED_HEADERS
+target_include_directories(ipc PUBLIC ${IPCSERVER_SRC_DIR})
+target_compile_definitions(ipc PRIVATE IPC_EXPORTS)
 
-    PUBLIC_CLASSES
-        server
-        client
-        tokens
-        debugCodes
-
-    PUBLIC_HEADERS
-        api.h
-
-    PRIVATE_CLASSES
-        zmqContext
-
-    PRIVATE_HEADERS
-        common.h
-        boostIncludePath.h
-
-    PYTHON_CPPFILES
-        moduleDeps.cpp
-
-    PYMODULE_CPPFILES
-        module.cpp
-        wrapClient.cpp
-
-    PYMODULE_FILES
-        __init__.py
-
-    LIBRARIES
-        ${USD_LIBRARIES}
-        cppzmq)
-
-if(HoudiniUSD_FOUND)
-    target_compile_definitions(ipc PUBLIC -DBOOST_NS=hboost)
-endif()
+install(TARGETS ipc)

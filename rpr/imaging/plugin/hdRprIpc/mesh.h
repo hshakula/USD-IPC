@@ -16,7 +16,7 @@ limitations under the License.
 
 #include "pxr/imaging/hd/mesh.h"
 #include "pxr/usd/usdGeom/mesh.h"
-#include "rpr/imaging/ipc/server.h"
+#include "server.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
 

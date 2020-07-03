@@ -15,7 +15,7 @@ limitations under the License.
 #define HDRPR_RENDER_PARAM_H
 
 #include "pxr/imaging/hd/renderDelegate.h"
-#include "rpr/imaging/ipc/server.h"
+#include "server.h"
 #include "pxr/usd/sdf/path.h"
 
 PXR_NAMESPACE_OPEN_SCOPE

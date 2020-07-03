@@ -39,9 +39,7 @@ pxr_core_prologue()
 
 add_subdirectory(deps)
 add_subdirectory(rpr/imaging/ipc)
-if(RPR_BUILD_SAMPLE_PLUGIN)
-    add_subdirectory(rpr/imaging/plugin/hdRprIpc)
-endif()
+add_subdirectory(rpr/imaging/plugin/hdRprIpc)
 
 pxr_core_epilogue()
 pxr_toplevel_epilogue()
